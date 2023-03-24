@@ -77,3 +77,4 @@ if __name__ == "__main__":
     df = pd.read_csv('/workspaces/Big-data-course-project/data/output.csv', index_col=None)
 
     df.info()
+    print(df.iloc[0])
