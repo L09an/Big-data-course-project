@@ -1,12 +1,4 @@
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import accuracy_score
-from sklearn.feature_selection import SelectKBest, chi2
-from sklearn.model_selection import GridSearchCV
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
-from keras.preprocessing.image import ImageDataGenerator
 
 # 读取数据
 data = pd.read_csv('../data/Correlation_Data_Sumed.csv')

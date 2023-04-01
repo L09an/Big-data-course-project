@@ -20,8 +20,8 @@ data['zip code'] = rankdata(data['zip code'])
 # 计算各变量和 total cost 的相关性
 corr = data.corr(method = "spearman")['total cost']
 
-# 筛选相关性绝对值大于等于 0.25 的变量
-significant_vars = corr[(abs(corr) >= 0.25) & (corr.index != 'total cost')].index.tolist()
+# 筛选相关性绝对值大于等于 0.35 的变量
+significant_vars = corr[(abs(corr) >= 0.35) & (corr.index != 'total cost')].index.tolist()
 
 # 打印初步的筛选结果
 print(significant_vars)
