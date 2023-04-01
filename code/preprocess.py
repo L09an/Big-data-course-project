@@ -1,10 +1,12 @@
 import pandas as pd
-import torch
-from torch import nn, optim
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
-
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import accuracy_score
+from sklearn.feature_selection import SelectKBest, chi2
+from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from keras.preprocessing.image import ImageDataGenerator
 
 # 读取数据
 data = pd.read_csv('../data/Correlation_Data_Sumed.csv')
@@ -19,6 +21,7 @@ def classify_total_cost(total_cost):
         return 3
     else:
         return 4
+
 
 
 # 应用分类函数并添加新列
@@ -37,4 +40,3 @@ test_data = pd.read_csv('../data/Test_Data.csv')
 new_test_data = test_data[selected_columns]
 new_test_data['cost rank'] = ''
 new_test_data.to_csv('../data/New_Test_Data.csv', index=False)
-
