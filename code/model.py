@@ -9,24 +9,36 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import classification_report
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
 
 # Read the data
 data = pd.read_csv("../data/New_Train_Data.csv")
 
-
 # Preprocess the data
-X = data.iloc[:, :-1].values
-y = data["cost rank"].values - 1  # transfer the label to 0-3
+# Apply one-hot encoding to categorical features
+categorical_features = ['zip code', 'city']
+numerical_features = [col for col in data.columns if col not in categorical_features + ["cost rank"]]
 
-#Scale or normalize the numerical range of input features
-scaler = StandardScaler() 
+# Create a preprocessor that can handle both numerical and categorical features
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', StandardScaler(with_mean=False), numerical_features),
+        ('cat', OneHotEncoder(), categorical_features)
+    ])
+
+X = preprocessor.fit_transform(data.iloc[:, :-1])
+y = data["cost rank"].values - 1  # transfer the label to 0-3
 
 # Dataset && DataLoader
 class HouseDataset(Dataset):
     def __init__(self, X, y):
-        self.X = torch.tensor(X, dtype=torch.float32)
+        self.X = torch.tensor(X.toarray(), dtype=torch.float32)  # Convert sparse matrix to dense
         self.y = torch.tensor(y, dtype=torch.long)
 
     def __len__(self):
@@ -34,8 +46,6 @@ class HouseDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
-
-
 
 
 class Swish(nn.Module):
@@ -105,14 +115,12 @@ fold_recalls = []
 losses_per_fold = []
 val_losses_per_fold = []
 
+fold_class_reports = []
+
 for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
     print(f"Fold {fold + 1}")
     X_train, X_test = X[train_index], X[test_index]
     y_train, y_test = y[train_index], y[test_index]
-
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
 
     train_dataset = HouseDataset(X_train, y_train)
     test_dataset = HouseDataset(X_test, y_test)
@@ -181,25 +189,24 @@ for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
             y_true.extend(labels.numpy())
             y_pred.extend(predicted.numpy())
 
-    accuracy = accuracy_score(y_true, y_pred)
-    precision = precision_score(y_true, y_pred, average='weighted')
-    recall = recall_score(y_true, y_pred, average='weighted')
+    report = classification_report(y_true, y_pred, output_dict=True)
+    fold_class_reports.append(report)
+    
+# Plotting the metrics for each fold
+num_classes = len(np.unique(y))
+metrics = ['precision', 'recall', 'f1-score']
 
-    fold_accuracies.append(accuracy)
-    fold_precisions.append(precision)
-    fold_recalls.append(recall)
-
-avg_accuracy = np.mean(fold_accuracies)
-avg_precision = np.mean(fold_precisions)
-avg_recall = np.mean(fold_recalls)
-
-print(f"K-Fold Validation Results: Accuracy: {avg_accuracy:.4f}, Precision: {avg_precision:.4f}, Recall: {avg_recall:.4f}")
-
-for i, (losses, val_losses) in enumerate(zip(losses_per_fold, val_losses_per_fold)):
+for i, report in enumerate(fold_class_reports):
     plt.figure()
-    plt.plot(losses, label='Training Loss - Fold {}'.format(i + 1))
-    plt.plot(val_losses, label='Validation Loss - Fold {}'.format(i + 1))
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
+    
+    for j, metric in enumerate(metrics):
+        class_metrics = [report[str(c)][metric] for c in range(num_classes)]
+        positions = [x + j * 0.2 for x in range(num_classes)]
+        plt.bar(positions, class_metrics, width=0.2, label=f'{metric} - Fold {i + 1}')
+    
+    plt.xticks(range(num_classes), [f'Class {c}' for c in range(num_classes)])
+    plt.xlabel('Classes')
+    plt.ylabel('Metric Value')
+    plt.title(f'Fold {i + 1} Metrics')
     plt.legend()
     plt.show()
