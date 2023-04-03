@@ -5,7 +5,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
+import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -18,13 +20,8 @@ data = pd.read_csv("../data/New_Train_Data.csv")
 X = data.iloc[:, :-1].values
 y = data["cost rank"].values - 1  # transfer the label to 0-3
 
-# divide the data set
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=42)
-
 #Scale or normalize the numerical range of input features
 scaler = StandardScaler() 
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
 
 # Dataset && DataLoader
 class HouseDataset(Dataset):
@@ -38,11 +35,7 @@ class HouseDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-train_dataset = HouseDataset(X_train, y_train)
-test_dataset = HouseDataset(X_test, y_test)
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
 
 class Swish(nn.Module):
@@ -56,23 +49,32 @@ class Swish(nn.Module):
 class Net(nn.Module):
     def __init__(self, input_size, output_size, dropout_prob=0.5, l2_reg=0.0):
         super(Net, self).__init__()
-        self.fc1 = nn.Linear(input_size, 128)
-        self.bn1 = nn.BatchNorm1d(128)
+        self.fc1 = nn.Linear(input_size, 256)
+        self.bn1 = nn.BatchNorm1d(256)
         self.dropout1 = nn.Dropout(dropout_prob)
-        self.fc2 = nn.Linear(128, 64)
-        self.bn2 = nn.BatchNorm1d(64)
+        
+        self.fc2 = nn.Linear(256, 128)
+        self.bn2 = nn.BatchNorm1d(128)
         self.dropout2 = nn.Dropout(dropout_prob)
-        self.fc3 = nn.Linear(64, 32)
-        self.bn3 = nn.BatchNorm1d(32)
-        self.fc4 = nn.Linear(32, output_size)
+        
+        self.fc3 = nn.Linear(128, 64)
+        self.bn3 = nn.BatchNorm1d(64)
         self.dropout3 = nn.Dropout(dropout_prob)
+        
+        self.fc4 = nn.Linear(64, 32)
+        self.bn4 = nn.BatchNorm1d(32)
+        self.dropout4 = nn.Dropout(dropout_prob)
+        
+        self.fc5 = nn.Linear(32, output_size)
+
         self.l2_reg = l2_reg
 
     def forward(self, x):
-        x = self.dropout1(Swish()(self.fc1(x)))
-        x = self.dropout2(Swish()(self.fc2(x)))
-        x = Swish()(self.fc3(x))
-        x = self.fc4(x)
+        x = self.dropout1(F.relu(self.bn1(self.fc1(x))))
+        x = self.dropout2(F.relu(self.bn2(self.fc2(x))))
+        x = self.dropout3(F.relu(self.bn3(self.fc3(x))))
+        x = self.dropout4(F.relu(self.bn4(self.fc4(x))))
+        x = self.fc5(x)
         return x
 
     def l2_regularization(self):
@@ -92,53 +94,112 @@ optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
 
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.1)
 
-## Train the model
-num_epochs = 100
-loss_history = []
-for epoch in range(num_epochs):
-    epoch_loss = 0
-    num_batches = 0
-    for batch_x, batch_y in train_loader:
-        optimizer.zero_grad()
-        outputs = model(batch_x)
-        loss = criterion(outputs, batch_y) + model.l2_regularization()
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item()
-        num_batches += 1
-    ## calculate the loss rate every epoch
-    epoch_loss /= num_batches
-    loss_history.append(epoch_loss)
+# Training the model
+num_splits = 5
+skf = StratifiedKFold(n_splits=num_splits, shuffle=True, random_state=42)
+
+fold_accuracies = []
+fold_precisions = []
+fold_recalls = []
+
+losses_per_fold = []
+val_losses_per_fold = []
+
+for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
+    print(f"Fold {fold + 1}")
+    X_train, X_test = X[train_index], X[test_index]
+    y_train, y_test = y[train_index], y[test_index]
+
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    train_dataset = HouseDataset(X_train, y_train)
+    test_dataset = HouseDataset(X_test, y_test)
+
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+    model = Net(input_size, output_size)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.1)
+
+    num_epochs = 60
+    losses = []
+    val_losses = []
+
+    for epoch in range(num_epochs):
+        model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+
+        for i, (inputs, labels) in enumerate(train_loader):
+            outputs = model(inputs)
+            loss = criterion(outputs, labels) + model.l2_regularization()
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+        scheduler.step()
+
+        train_loss = running_loss / len(train_loader)
+        losses.append(train_loss)
+
+        model.eval()
+        val_loss = 0.0
+
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+
+        val_loss /= len(test_loader)
+        val_losses.append(val_loss)
+        
+        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
     
-    scheduler.step()
+    losses_per_fold.append(losses)
+    val_losses_per_fold.append(val_losses)
+
+    model.eval()
+    y_true = []
+    y_pred = []
     
-    ## Evaluate the model on validation set and record the loss
-    ## Adjust the learning rate based on validation loss
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+            y_true.extend(labels.numpy())
+            y_pred.extend(predicted.numpy())
 
-# 绘制训练损失曲线
-plt.plot(loss_history)
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('Training Loss Curve')
-plt.show()
+    accuracy = accuracy_score(y_true, y_pred)
+    precision = precision_score(y_true, y_pred, average='weighted')
+    recall = recall_score(y_true, y_pred, average='weighted')
 
-## Evaluate the model
-model.eval()
-X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
-y_test_tensor = torch.tensor(y_test, dtype=torch.long)
-with torch.no_grad():
-    test_output = model(X_test_tensor)
-    _, predicted = torch.max(test_output.data, 1)
+    fold_accuracies.append(accuracy)
+    fold_precisions.append(precision)
+    fold_recalls.append(recall)
 
+avg_accuracy = np.mean(fold_accuracies)
+avg_precision = np.mean(fold_precisions)
+avg_recall = np.mean(fold_recalls)
 
-## calculate Accuracy, Precision, Recall and F1 score
-## Using average = 'weighted' to consider the nums of different categories
-accuracy = accuracy_score(y_test, predicted)
-precision = precision_score(y_test, predicted, average='weighted')
-recall = recall_score(y_test, predicted, average='weighted')
-f1 = f1_score(y_test, predicted, average='weighted')
-## print the rates:
-print("Accuracy: {:.4f}".format(accuracy))
-print("Precision: {:.4f}".format(precision))
-print("Recall: {:.4f}".format(recall))
-print("F1 Score: {:.4f}".format(f1))
+print(f"K-Fold Validation Results: Accuracy: {avg_accuracy:.4f}, Precision: {avg_precision:.4f}, Recall: {avg_recall:.4f}")
+
+for i, (losses, val_losses) in enumerate(zip(losses_per_fold, val_losses_per_fold)):
+    plt.figure()
+    plt.plot(losses, label='Training Loss - Fold {}'.format(i + 1))
+    plt.plot(val_losses, label='Validation Loss - Fold {}'.format(i + 1))
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
