@@ -1,28 +1,28 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-import matplotlib.pyplot as plt
 import torch.nn.functional as F
-from sklearn.model_selection import train_test_split
+from torch.utils.data import Dataset, DataLoader
+
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import classification_report
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 
+
 # Read the data
-data = pd.read_csv("../data/New_Train_Data.csv")
+data = pd.read_csv("../data/2.4_Train_Data_New.csv")
 
 # Preprocess the data
 # Apply one-hot encoding to categorical features
-categorical_features = ['zip code', 'city']
+categorical_features = ['city']
 numerical_features = [col for col in data.columns if col not in categorical_features + ["cost rank"]]
 
 # Create a preprocessor that can handle both numerical and categorical features
@@ -47,7 +47,7 @@ class HouseDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-
+# function
 class Swish(nn.Module):
     def __init__(self):
         super().__init__()
@@ -93,29 +93,25 @@ class Net(nn.Module):
             l2_loss += torch.norm(param, p=2)**2
         return self.l2_reg * l2_loss
 
-# 初始化模型、损失函数和优化器
+
+
+# Initialize the model, loss function and optimizer
 input_size = X.shape[1]
 output_size = len(np.unique(y))
 model = Net(input_size, output_size)
 criterion = nn.CrossEntropyLoss()
-## Using Adam algorithm to optimize parameters
-## weight_decay to adjust the optimize value to certain parameters
-optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5) 
-
+optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.1)
+
+
 
 # Training the model
 num_splits = 5
 skf = StratifiedKFold(n_splits=num_splits, shuffle=True, random_state=42)
 
-fold_accuracies = []
-fold_precisions = []
-fold_recalls = []
-
+metrics_per_fold = []
 losses_per_fold = []
 val_losses_per_fold = []
-
-fold_class_reports = []
 
 for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
     print(f"Fold {fold + 1}")
@@ -129,6 +125,7 @@ for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
     model = Net(input_size, output_size)
+    
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.1)
@@ -136,7 +133,8 @@ for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
     num_epochs = 60
     losses = []
     val_losses = []
-
+    
+    
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
@@ -178,35 +176,46 @@ for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
     losses_per_fold.append(losses)
     val_losses_per_fold.append(val_losses)
 
-    model.eval()
-    y_true = []
-    y_pred = []
-    
+    plt.figure()
+    plt.plot(range(1, num_epochs + 1), losses, label='Training Loss')
+    plt.plot(range(1, num_epochs + 1), val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
+
+    fold_true_labels = []
+    fold_predictions = []
+
     with torch.no_grad():
         for inputs, labels in test_loader:
             outputs = model(inputs)
             _, predicted = torch.max(outputs.data, 1)
-            y_true.extend(labels.numpy())
-            y_pred.extend(predicted.numpy())
+            fold_true_labels.extend(labels.numpy())
+            fold_predictions.extend(predicted.numpy())
 
-    report = classification_report(y_true, y_pred, output_dict=True)
-    fold_class_reports.append(report)
-    
-# Plotting the metrics for each fold
-num_classes = len(np.unique(y))
-metrics = ['precision', 'recall', 'f1-score']
+    fold_accuracy = accuracy_score(fold_true_labels, fold_predictions)
+    fold_precision = precision_score(fold_true_labels, fold_predictions, average='weighted')
+    fold_recall = recall_score(fold_true_labels, fold_predictions, average='weighted')
+    fold_f1 = f1_score(fold_true_labels, fold_predictions, average='weighted')
 
-for i, report in enumerate(fold_class_reports):
-    plt.figure()
+    print(f"Fold {fold + 1} Accuracy: {fold_accuracy:.4f}")
+    print(f"Fold {fold + 1} Precision: {fold_precision:.4f}")
+    print(f"Fold {fold + 1} Recall: {fold_recall:.4f}")
+    print(f"Fold {fold + 1} F1 Score: {fold_f1:.4f}")
     
-    for j, metric in enumerate(metrics):
-        class_metrics = [report[str(c)][metric] for c in range(num_classes)]
-        positions = [x + j * 0.2 for x in range(num_classes)]
-        plt.bar(positions, class_metrics, width=0.2, label=f'{metric} - Fold {i + 1}')
+    metrics_per_fold.append((fold_accuracy, fold_precision, fold_recall, fold_f1))
+    losses_per_fold.append(losses)
+    val_losses_per_fold.append(val_losses)
+
+    fold_confusion_matrix = confusion_matrix(fold_true_labels, fold_predictions)
+    print(f"Fold {fold + 1} Confusion Matrix:\n{fold_confusion_matrix}")
+
+
+average_metrics = np.mean(metrics_per_fold, axis=0)
+print(f"Average Accuracy: {average_metrics[0]:.4f}")
+print(f"Average Precision: {average_metrics[1]:.4f}")
+print(f"Average Recall: {average_metrics[2]:.4f}")
+print(f"Average F1 Score: {average_metrics[3]:.4f}")
+
     
-    plt.xticks(range(num_classes), [f'Class {c}' for c in range(num_classes)])
-    plt.xlabel('Classes')
-    plt.ylabel('Metric Value')
-    plt.title(f'Fold {i + 1} Metrics')
-    plt.legend()
-    plt.show()
