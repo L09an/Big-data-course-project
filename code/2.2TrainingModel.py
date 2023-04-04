@@ -22,7 +22,7 @@ data = pd.read_csv("../data/2.4_Train_Data_New.csv")
 
 # Preprocess the data
 # Apply one-hot encoding to categorical features
-categorical_features = ['city']
+categorical_features = ['zip code', 'city']
 numerical_features = [col for col in data.columns if col not in categorical_features + ["cost rank"]]
 
 # Create a preprocessor that can handle both numerical and categorical features

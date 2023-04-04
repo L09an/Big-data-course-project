@@ -19,7 +19,7 @@ new_categorical_features = []
 for feature in categorical_features:
     group = data.groupby(feature)["total cost"].apply(list)
     f, p = f_oneway(*group)
-    if p < 0.05 and f > 45:
+    if p < 0.05 and f > 40:
         new_categorical_features.append(feature)
         print(f"Feature {feature}, F-value: {f:.2f}, p-value: {p:.4f}")
         
