@@ -54,8 +54,8 @@ class Net(nn.Module):
 
         self.fc5 = nn.Linear(32, output_size)
 
-        self.l2_reg = l2_reg
-
+        self.l2_reg = l2_reg ## Adjust the value of l2_reg to find the suitable parameter
+    # Function: Relu(), using 0.15 dropout in every layer to reduce fit
     def forward(self, x):
         x = self.dropout1(F.relu(self.bn1(self.fc1(x))))
         x = self.dropout2(F.relu(self.bn2(self.fc2(x))))
@@ -72,9 +72,13 @@ class Net(nn.Module):
 
 
 def preprocess_data(data):
+    # Preprocessing filtered categorical feature variables
+    # In Preprocess.py, we find zip code and city are strongly related to cost rank
     categorical_features = ['zip code', 'city']
     numerical_features = [col for col in data.columns if col not in categorical_features + ["cost rank"]]
 
+    # Normalize the numerical variables
+    # Hot-encode the categorical features so that the neural network can identify the categorical features
     preprocessor = ColumnTransformer(
         transformers=[
             ('num', StandardScaler(with_mean=False), numerical_features),
@@ -82,10 +86,10 @@ def preprocess_data(data):
         ])
 
     X = preprocessor.fit_transform(data.iloc[:, :-1])
-    y = data["cost rank"].values - 1
+    y = data["cost rank"].values - 1 # The cost rank: 1,2,3,4; In y[], we transfer them to 0,1,2,3
     return X, y
 
-
+# Prediction function every fold
 def predict_fold(model, test_loader):
     fold_true_labels = []
     fold_predictions = []
@@ -99,7 +103,7 @@ def predict_fold(model, test_loader):
 
     return fold_true_labels, fold_predictions
 
-
+# Evaluation function, return accuracy, precision, recall and F1 score to evaluate the model
 def evaluate_fold(y_true, y_pred):
     accuracy = accuracy_score(y_true, y_pred)
     precision = precision_score(y_true, y_pred, average='weighted')
@@ -129,9 +133,9 @@ def train_model(model, criterion, optimizer, scheduler, train_loader, test_loade
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-        scheduler.step()
-        train_loss = running_loss / len(train_loader)
-        losses.append(train_loss)
+        scheduler.step() #Using the scheduler to adjust the learning rate every epoch
+        train_loss = running_loss / len(train_loader) # Calculate the training loss
+        losses.append(train_loss) #get 
 
         model.eval()
         val_loss = 0.0
@@ -162,7 +166,7 @@ def main():
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.1)
 
     # Training the model
-    num_splits = 5
+    num_splits = 5 # K = 5
     skf = StratifiedKFold(n_splits=num_splits, shuffle=True, random_state=42)
 
     metrics_per_fold = []
@@ -180,13 +184,16 @@ def main():
 
         model = Net(input_size, output_size)
 
-        criterion = nn.CrossEntropyLoss()
+        # Cross-entropy is used to determine how close the actual output is to the desired output
+        # It is suitable for classification models
+        criterion = nn.CrossEntropyLoss() 
         optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.1)
 
         num_epochs = 60
         losses, val_losses = train_model(model, criterion, optimizer, scheduler, train_loader, test_loader, num_epochs)
 
+        # Draw the loss curve for each FOLD
         plt.figure()
         plt.plot(range(1, len(losses) + 1), losses, label='Training Loss')
         plt.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss')
@@ -196,7 +203,7 @@ def main():
         plt.show()
 
         fold_true_labels, fold_predictions = predict_fold(model, test_loader)
-
+        # Get the evaluation rates every FOLD
         fold_accuracy, fold_precision, fold_recall, fold_f1 = evaluate_fold(fold_true_labels, fold_predictions)
         print(f"Fold {fold + 1} Accuracy: {fold_accuracy:.4f}")
         print(f"Fold {fold + 1} Precision: {fold_precision:.4f}")
@@ -204,10 +211,11 @@ def main():
         print(f"Fold {fold + 1} F1 Score: {fold_f1:.4f}")
 
         metrics_per_fold.append((fold_accuracy, fold_precision, fold_recall, fold_f1))
-
+        
         fold_confusion_matrix = confusion_matrix(fold_true_labels, fold_predictions)
         print(f"Fold {fold + 1} Confusion Matrix:\n{fold_confusion_matrix}")
 
+    # Final results
     average_metrics = np.mean(metrics_per_fold, axis=0)
     print(f"Average Accuracy: {average_metrics[0]:.4f}")
     print(f"Average Precision: {average_metrics[1]:.4f}")
