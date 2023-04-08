@@ -16,6 +16,7 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
 
 
@@ -71,35 +72,46 @@ class Net(nn.Module):
         return self.l2_reg * l2_loss
 
 
-def preprocess_data(data):
+def preprocess_data(train_data, test_data):
     # Preprocessing filtered categorical feature variables
     # In Preprocess.py, we find zip code and city are strongly related to cost rank
     categorical_features = ['zip code', 'city']
-    numerical_features = [col for col in data.columns if col not in categorical_features + ["cost rank"]]
+    numerical_features = [col for col in train_data.columns if col not in categorical_features + ["cost rank"]]
 
     # Normalize the numerical variables
     # Hot-encode the categorical features so that the neural network can identify the categorical features
     preprocessor = ColumnTransformer(
         transformers=[
             ('num', StandardScaler(with_mean=False), numerical_features),
-            ('cat', OneHotEncoder(), categorical_features)
+            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
         ])
 
-    X = preprocessor.fit_transform(data.iloc[:, :-1])
-    y = data["cost rank"].values - 1 # The cost rank: 1,2,3,4; In y[], we transfer them to 0,1,2,3
-    return X, y
+    X_train = preprocessor.fit_transform(train_data.iloc[:, :-1])
+    y_train = train_data["cost rank"].values - 1  # The cost rank: 1,2,3,4; In y[], we transfer them to 0,1,2,3
+
+    X_test = preprocessor.transform(test_data.iloc[:, :-1])
+
+    if "cost rank" in test_data.columns:
+        y_test = test_data["cost rank"].values - 1
+        return X_train, y_train, X_test, y_test, preprocessor
+    else:
+        return X_train, y_train, X_test, preprocessor
 
 # Prediction function every fold
 def predict_fold(model, test_loader):
     fold_true_labels = []
     fold_predictions = []
-
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+    
     with torch.no_grad():
         for inputs, labels in test_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
             _, predicted = torch.max(outputs.data, 1)
-            fold_true_labels.extend(labels.numpy())
-            fold_predictions.extend(predicted.numpy())
+            fold_true_labels.extend(labels.cpu().numpy())
+            fold_predictions.extend(predicted.cpu().numpy())
 
     return fold_true_labels, fold_predictions
 
@@ -115,12 +127,18 @@ def evaluate_fold(y_true, y_pred):
 def train_model(model, criterion, optimizer, scheduler, train_loader, test_loader, num_epochs):
     losses = []
     val_losses = []
+    ## If the pc has cuda, using it to calculate so that the speed is faster
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
         correct = 0
         total = 0
         for i, (inputs, labels) in enumerate(train_loader):
+            # Move inputs and labels to the same device as the model
+            inputs, labels = inputs.to(device), labels.to(device)
+            
             outputs = model(inputs)
             loss = criterion(outputs, labels) + model.l2_regularization()
 
@@ -135,12 +153,13 @@ def train_model(model, criterion, optimizer, scheduler, train_loader, test_loade
 
         scheduler.step() #Using the scheduler to adjust the learning rate every epoch
         train_loss = running_loss / len(train_loader) # Calculate the training loss
-        losses.append(train_loss) #get 
+        losses.append(train_loss)
 
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
             for inputs, labels in test_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
                 val_loss += loss.item()
@@ -153,9 +172,11 @@ def train_model(model, criterion, optimizer, scheduler, train_loader, test_loade
     return losses, val_losses
 
 
-def main():
+
+
+def evaluation():
     data = pd.read_csv("../data/2.4_Train_Data_New.csv")
-    X, y = preprocess_data(data)
+    X, y, preprocessor = preprocess_data(data)
 
     # Initialize the model, loss function and optimizer
     input_size = X.shape[1]
@@ -191,16 +212,17 @@ def main():
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.1)
 
         num_epochs = 60
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         losses, val_losses = train_model(model, criterion, optimizer, scheduler, train_loader, test_loader, num_epochs)
 
         # Draw the loss curve for each FOLD
-        plt.figure()
-        plt.plot(range(1, len(losses) + 1), losses, label='Training Loss')
-        plt.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.legend()
-        plt.show()
+        #plt.figure()
+        #plt.plot(range(1, len(losses) + 1), losses, label='Training Loss')
+        #plt.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss')
+        #plt.xlabel('Epoch')
+        #plt.ylabel('Loss')
+        #plt.legend()
+        #plt.show()
 
         fold_true_labels, fold_predictions = predict_fold(model, test_loader)
         # Get the evaluation rates every FOLD
@@ -223,6 +245,72 @@ def main():
     print(f"Average F1 Score: {average_metrics[3]:.4f}")
 
 
+
+   
+def predict_cost_rank(model, preprocessor, test_data):
+    X_test, _ = preprocessor(test_data)
+    X_test_tensor = torch.tensor(X_test.toarray(), dtype=torch.float32)
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    X_test_tensor = X_test_tensor.to(device)
+    
+    model.to(device)
+    model.eval()
+    with torch.no_grad():
+        outputs = model(X_test_tensor)
+        _, predicted_rank = torch.max(outputs.data, 1)
+    return predicted_rank.cpu().numpy() # return the value to cpu
+
+
+
+
+def main():
+    #evaluation()
+    train_data = pd.read_csv("../data/2.4_Train_Data_New.csv")
+    test_data  = pd.read_csv("../data/2.4_Test_Data_New.csv")
+    # Preprocess train and test data
+    X_train, y_train, X_test, y_test, preprocessor = preprocess_data(train_data, test_data)
+
+    # Initialize the model, loss function and optimizer
+    input_size = X_train.shape[1]
+    output_size = len(np.unique(y_train))
+    final_model = Net(input_size, output_size)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(final_model.parameters(), lr=0.0001, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.1)
+    
+    # Split the dataset into training and validation sets
+    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
+
+    # Create DataLoaders for training and validation sets
+    train_dataset = HouseDataset(X_train, y_train)
+    val_dataset = HouseDataset(X_val, y_val)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+
+    # Train the model
+    num_epochs = 60
+    losses, val_losses = train_model(final_model, criterion, optimizer, scheduler, train_loader, val_loader, num_epochs)
+    # Draw the loss curve for each FOLD
+    plt.figure()
+    plt.plot(range(1, len(losses) + 1), losses, label='Training Loss')
+    plt.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
+        
+    # Save the model
+    torch.save(final_model.state_dict(), 'final_model.pth')
+
+    X_test_tensor = torch.tensor(X_test.toarray(), dtype=torch.float).cuda()
+    final_model.eval()
+    y_pred = final_model(X_test_tensor).argmax(axis=1).detach().cpu().numpy()
+
+    # Save the predicted cost ranks to a file
+    test_data['cost rank'] = y_pred + 1
+    test_data.to_csv('../data/2.4_Test_Data_New_predicted.csv', index=False)
+    
 if __name__ == "__main__":
     main()
 
