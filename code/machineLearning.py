@@ -86,16 +86,22 @@ def preprocess_data(train_data, test_data):
             ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
         ])
 
-    X_train = preprocessor.fit_transform(train_data.iloc[:, :-1])
-    y_train = train_data["cost rank"].values - 1  # The cost rank: 1,2,3,4; In y[], we transfer them to 0,1,2,3
-
-    X_test = preprocessor.transform(test_data.iloc[:, :-1])
-
-    if "cost rank" in test_data.columns:
-        y_test = test_data["cost rank"].values - 1
-        return X_train, y_train, X_test, y_test, preprocessor
+    if test_data is None:
+        X_train = preprocessor.fit_transform(train_data.iloc[:, :-1])
+        y_train = train_data["cost rank"].values - 1  # The cost rank: 1,2,3,4; In y[], we transfer them to 0,1,2,3
+        
+        return X_train, y_train, preprocessor
     else:
-        return X_train, y_train, X_test, preprocessor
+        X_train = preprocessor.fit_transform(train_data.iloc[:, :-1])
+        y_train = train_data["cost rank"].values - 1  # The cost rank: 1,2,3,4; In y[], we transfer them to 0,1,2,3
+
+        X_test = preprocessor.transform(test_data.iloc[:, :-1])
+
+        if "cost rank" in test_data.columns:
+            y_test = test_data["cost rank"].values - 1
+            return X_train, y_train, X_test, y_test, preprocessor
+        else:
+            return X_train, y_train, X_test, preprocessor
 
 # Prediction function every fold
 def predict_fold(model, test_loader):
@@ -176,7 +182,7 @@ def train_model(model, criterion, optimizer, scheduler, train_loader, test_loade
 
 def evaluation():
     data = pd.read_csv("../data/2.4_Train_Data_New.csv")
-    X, y, preprocessor = preprocess_data(data)
+    X, y, preprocessor = preprocess_data(data, None)
 
     # Initialize the model, loss function and optimizer
     input_size = X.shape[1]
@@ -265,7 +271,7 @@ def predict_cost_rank(model, preprocessor, test_data):
 
 
 def main():
-    #evaluation()
+    evaluation()
     train_data = pd.read_csv("../data/2.4_Train_Data_New.csv")
     test_data  = pd.read_csv("../data/2.4_Test_Data_New.csv")
     # Preprocess train and test data
@@ -307,9 +313,10 @@ def main():
     final_model.eval()
     y_pred = final_model(X_test_tensor).argmax(axis=1).detach().cpu().numpy()
 
-    # Save the predicted cost ranks to a file
-    test_data['cost rank'] = y_pred + 1
-    test_data.to_csv('../data/2.4_Test_Data_New_predicted.csv', index=False)
+    # Save the predicted cost ranks to the original file
+    original_test_data  = pd.read_csv("../data/Test_Data.csv")
+    original_test_data['total cost'] = y_pred + 1
+    original_test_data.to_csv('../data/Test_Data.csv', index=False)
     
 if __name__ == "__main__":
     main()

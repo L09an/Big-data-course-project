@@ -101,5 +101,5 @@ print(selected_columns)
 # Read the test data and save it in the new style.
 test_data = pd.read_csv('../data/Test_Data.csv')
 new_test_data = test_data[selected_columns]
-new_test_data.loc[:, 'cost rank'] = ''
+new_test_data['cost rank'] = ""
 new_test_data.to_csv('../data/2.4_Test_Data_New.csv', index=False)
